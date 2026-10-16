@@ -16,6 +16,8 @@ export interface Profile { name: string; model: string; gateway: GatewayState }
 export interface Source<T> {
   availability: Availability
   data: T
+  /** True when this response reuses previously successful data after a read failure. */
+  stale?: boolean
   error?: { code: 'COMMAND_FAILED' | 'TIMEOUT' | 'LOCKED'; message: string }
 }
 export interface RuntimeSnapshot {
@@ -502,9 +504,21 @@ async function read<T>(run: Run, file: string, args: string[], parse: (output: s
 /** Profile names passed to `hermes -p`: plain names only, never anything that looks like an option. */
 export const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 
+const lastSuccessfulProfiles = new WeakMap<Run, Profile[]>()
+
+async function readProfilesRetainingLastGood(run: Run): Promise<Source<Profile[]>> {
+  const current = await read(run, 'hermes', ['profile', 'list'], parseProfiles, [])
+  if (current.availability === 'available') {
+    lastSuccessfulProfiles.set(run, current.data)
+    return current
+  }
+  const previous = lastSuccessfulProfiles.get(run)
+  return previous ? { ...current, availability: 'available', data: previous, stale: true } : current
+}
+
 export async function collectSnapshot(run: Run = systemRun): Promise<RuntimeSnapshot> {
   const [profiles, openCode] = await Promise.all([
-    read(run, 'hermes', ['profile', 'list'], parseProfiles, []),
+    readProfilesRetainingLastGood(run),
     read(run, 'opencode', ['--version'], (value) => value.trim().split('\n').pop()?.trim() || 'Unknown', 'Unknown'),
   ])
   return { profiles, openCode, fetchedAt: new Date().toISOString() }

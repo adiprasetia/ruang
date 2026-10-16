@@ -46,7 +46,25 @@ describe('Hermes output parsers', () => {
     })
 
     expect(snapshot.profiles).toMatchObject({ availability: 'unavailable', data: [], error: { code: 'COMMAND_FAILED' } })
+  })
 
+  it('keeps the last successful profile list when a later read fails', async () => {
+    let fail = false
+    const run = async (_file: string, args: string[]) => {
+      if (args.join(' ') === 'profile list') {
+        if (fail) throw new Error('timed out')
+        return ' Profile    Model       Gateway\n ───────\n ◆default  gpt-5.6    running\n  researcher  gpt-5.5  running\n'
+      }
+      return '1.0.0'
+    }
+
+    const first = await collectSnapshot(run)
+    fail = true
+    const next = await collectSnapshot(run)
+
+    expect(next.profiles.data.map((profile) => profile.name)).toEqual(['default', 'researcher'])
+    expect(next.profiles).toMatchObject({ availability: 'available', stale: true, error: { code: 'TIMEOUT' } })
+    expect(first.profiles.stale).toBeUndefined()
   })
 
   it('uses the default profile gateway state without invoking a separate default gateway command', async () => {
